@@ -1,7 +1,7 @@
 import arrow
 from bloop import Column, UUID, DateTime, ConstraintViolation, NotModified
 from dvox.app import engine, atomic_engine, config
-from dvox.exceptions import InUse, RetryOperation
+from dvox.exceptions import InUse, RetryOperation, Expired
 from dvox.models.types import Position
 
 
@@ -12,11 +12,9 @@ class ChunkLock(engine.model):
     acquire = Column(DateTime, name='a')
 
     def acquire(self):
-        previous_acquire = self.acquire
         self.acquire = arrow.now()
-        not_exist = ChunkLock.world.is_(None) & ChunkLock.chunk.is_(None)
         try:
-            engine.save(self, condition=not_exist)
+            atomic_engine.save(self)
         except ConstraintViolation:
             existing_lock = self._current()
 
@@ -25,54 +23,72 @@ class ChunkLock(engine.model):
             # up before we could compare acquire time, or it was released.
             # At this point we should simply retry the acquire.
             if existing_lock is None:
-                self.acquire = previous_acquire
                 raise RetryOperation()
 
             elapsed = (existing_lock.acquire - self.acquire).total_seconds()
 
             # The worker that's trying to acquire the lock is
-            # the same one that previously had the lock.  Update
-            # acquire time and attempt to save
+            # the same one that previously had the lock.  Renew the lock.
             if existing_lock.worker == self.worker:
-                existing_lock.acquire = self.acquire
-                try:
-                    atomic_engine.save(existing_lock)
-                except ConstraintViolation:
-                    # The worker or acquire time on the existing lock
-                    # has changed.  Signal that the acquire can be
-                    # retried.
-                    self.acquire = previous_acquire
-                    raise RetryOperation()
+                existing_lock.renew()
             # The worker is different, but hasn't checked in within the
-            # CHUNK_LOCK_TIMEOUT_SECONDS, and can be re-acquired by a new
-            # worker.  Try to take it over and update acquire time
+            # timeout; release the old lock if it's too
+            # old, and signal a retry.
             elif elapsed >= config["CHUNK_LOCK_TIMEOUT_SECONDS"]:
-                existing_lock.worker = self.worker
-                existing_lock.acquire = self.acquire
-                try:
-                    atomic_engine.save(existing_lock)
-                except ConstraintViolation:
-                    # The worker or acquire time on the existing lock
-                    # has changed.  Signal that the acquire can be
-                    # retried.
-                    self.acquire = previous_acquire
-                    raise RetryOperation()
+                existing_lock.release()
+                raise RetryOperation()
             # Existing lock is owned by a different worker, and was last
             # acquired within the lock timeout.  Can't be acquired right now.
             else:
-                self.acquire = previous_acquire
                 raise InUse()
         # Success
+
+    def release(self):
+        try:
+            atomic_engine.delete(self)
+        except ConstraintViolation:
+            # The lock has changed - either it expired and was overwritten,
+            # or the same worker holds it and it was refreshed.
+
+            # Either way, we shouldn't delete it since self refers to a lock
+            # that no longer exists.
+            pass
+
+    def renew(self):
+        self.acquire = arrow.now()
+        try:
+            atomic_engine.save(self)
+        except ConstraintViolation:
+            # The lock was deleted, another worker took it over, or
+            # it was renewed before this call.
+            existing_lock = self._current()
+
+            # The lock was deleted - try to acquire it.
+            if existing_lock is None:
+                try:
+                    existing_lock.acquire()
+                except InUse:
+                    # The lock was acquired after the last load of None.
+                    # Signal that the renew can be retried (lock may be held
+                    # by the same worker).
+                    raise RetryOperation()
+            # Another worker took it over.
+            elif existing_lock.worker != self.worker:
+                raise Expired()
+            # Lock exists, same worker, acquire time is different.  Signal
+            # that the renew can be retried.
+            else:
+                raise RetryOperation()
 
     def _current(self):
         """
         Returns the current lock for the lock's world/position,
         or None if one does not exist.
         """
-        current_lock = ChunkLock(world=self.world, chunk=self.chunk)
+        existing_lock = ChunkLock(world=self.world, chunk=self.chunk)
         try:
-            engine.load(current_lock)
+            atomic_engine.load(existing_lock)
         except NotModified:
             return None
         else:
-            return current_lock
+            return existing_lock
