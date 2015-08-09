@@ -9,7 +9,7 @@ from dvox.exceptions import CreateFailed
 class Worker(engines.model):
     id = Column(UUID, hash_key=True)
     ip = Column(String)
-    expires = Column(DateTime, name='e')
+    expires = Column(DateTime, name="e")
 
     @classmethod
     def unique(cls, ip):
@@ -30,3 +30,8 @@ class Worker(engines.model):
         self.expires = arrow.now().replace(
             seconds=config["WORKER_TIMEOUT_SECONDS"])
         engines.update.save(self)
+
+    @classmethod
+    def active_workers(cls):
+        scan = engines.update.scan(Worker)
+        return scan.filter(Worker.expires > arrow.now())
