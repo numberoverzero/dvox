@@ -1,8 +1,7 @@
 import arrow
 from bloop import Column, UUID, DateTime, ConstraintViolation, NotModified
-
-from dvox.app import config
 from dvox import engines
+from dvox.app import config
 from dvox.exceptions import InUse, Expired
 from dvox.models.types import Position
 
@@ -11,10 +10,12 @@ class ChunkLock(engines.model):
     world = Column(UUID, hash_key=True, name='w')
     chunk = Column(Position, range_key=True, name="c")
     worker = Column(UUID, name='r')
-    time = Column(DateTime, name='t')
+    expires = Column(DateTime, name='e')
 
     def acquire(self):
-        self.time = arrow.now()
+        now = arrow.now()
+        self.expires = now.replace(
+            seconds=config["CHUNK_LOCK_TIMEOUT_SECONDS"])
         try:
             engines.overwrite.save(self, condition=ChunkLock.NOT_EXIST)
         except ConstraintViolation:
@@ -22,16 +23,14 @@ class ChunkLock(engines.model):
 
             # The lock that existed when we tried to save above is
             # no longer there.  A periodic cleanup may have swept it
-            # up before we could compare acquire time, or it was released.
+            # up, or it was manually released.
             # At this point we should simply retry the acquire.
             if existing_lock is None:
                 self.acquire()
 
-            elapsed = (self.time - existing_lock.time).total_seconds()
-
             # The worker hasn't checked in within the timeout; release the
             # old lock and retry.
-            if elapsed >= config["CHUNK_LOCK_TIMEOUT_SECONDS"]:
+            if now >= existing_lock.expires:
                 try:
                     existing_lock.release()
                 # Suppress InUse, since it means the actual lock was
@@ -69,7 +68,8 @@ class ChunkLock(engines.model):
             raise InUse
 
     def renew(self):
-        self.time = arrow.now()
+        self.expires = arrow.now().replace(
+            seconds=config["CHUNK_LOCK_TIMEOUT_SECONDS"])
         try:
             same_worker = ChunkLock.worker == self.worker
             engines.overwrite.save(self, condition=same_worker)
