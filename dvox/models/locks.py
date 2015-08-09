@@ -37,9 +37,15 @@ class ChunkLock(engine.model):
             # The worker that's trying to acquire the lock is
             # the same one that previously had the lock.  Renew the lock.
             elif existing_lock.worker == self.worker:
-                # Will recurse into acquire again if the lock was
-                # deleted after the load above.
-                existing_lock.renew()
+                try:
+                    existing_lock.renew()
+                # Some expired locks can be retried.  If the lock was deleted
+                # after the load above, it can be acquired, but renew will
+                # refuse because the lock isn't exactly the same.
+                # This isn't a big deal; if the lock was taken over by
+                # another worker, the next acquire will fail with InUse below.
+                except Expired:
+                    raise RetryOperation()
             # Existing lock is owned by a different worker, and was last
             # acquired within the lock timeout.  Can't be acquired right now.
             else:
@@ -68,15 +74,9 @@ class ChunkLock(engine.model):
             # it was renewed before this call.
             existing_lock = self._current()
 
-            # The lock was deleted - try to acquire it.
+            # The lock was deleted
             if existing_lock is None:
-                try:
-                    self.acquire()
-                except InUse:
-                    # The lock was acquired after the last load of None.
-                    # We don't raise InUse because the lock that won may be the
-                    # same worker - in which case, this is a retryable renew.
-                    raise RetryOperation()
+                raise Expired()
             # Another worker took it over.
             elif existing_lock.worker != self.worker:
                 raise Expired()
