@@ -19,7 +19,7 @@ class ChunkLock(engines.model):
         try:
             engines.overwrite.save(self, condition=ChunkLock.NOT_EXIST)
         except ConstraintViolation:
-            existing_lock = self._current()
+            existing_lock = self.current()
 
             # The lock that existed when we tried to save above is
             # no longer there.  A periodic cleanup may have swept it
@@ -77,7 +77,7 @@ class ChunkLock(engines.model):
             # The lock was deleted, or another worker took it over.
             raise Expired
 
-    def _current(self):
+    def current(self):
         """
         Returns the current lock for the lock's world/position,
         or None if one does not exist.

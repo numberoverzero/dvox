@@ -11,13 +11,17 @@ class Worker(engines.model):
     ip = Column(String)
     expires = Column(DateTime, name="e")
 
+    def __init__(self, **kwargs):
+        if "expires" not in kwargs:
+            kwargs["expires"] = arrow.now().replace(
+                seconds=config["WORKER_TIMEOUT_SECONDS"])
+        super().__init__(**kwargs)
+
     @classmethod
     def unique(cls, ip):
         retries = config["CREATE_RETRIES"]
         while retries:
-            expires = arrow.now().replace(
-                seconds=config["WORKER_TIMEOUT_SECONDS"])
-            obj = cls(id=uuid.uuid4(), ip=ip, expires=expires)
+            obj = Worker(id=uuid.uuid4(), ip=ip)
             try:
                 engines.atomic.save(obj)
             except ConstraintViolation:
