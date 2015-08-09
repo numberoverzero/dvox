@@ -1,6 +1,7 @@
 import uuid
 from bloop import Column, UUID, String, ConstraintViolation
-from dvox.app import engine, config
+from dvox.app import config
+from dvox.engines import engine
 from dvox.exceptions import CreateFailed
 
 
