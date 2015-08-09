@@ -13,7 +13,7 @@ class ChunkLock(engine.model):
 
     @classmethod
     def acquire(cls, world, chunk, worker):
-        now = arrow()
+        now = arrow.now()
         lock = ChunkLock(world=world, chunk=chunk,
                          worker=worker, acquire=now)
         not_exist = ChunkLock.world.is_(None) & ChunkLock.chunk.is_(None)
