@@ -1,6 +1,8 @@
 import arrow
 from bloop import Column, UUID, DateTime, ConstraintViolation, NotModified
-from dvox.app import engine, config
+
+from dvox.app import config
+from dvox.engines import atomic, consistent, engine, overwrite
 from dvox.exceptions import InUse, RetryOperation, Expired
 from dvox.models.types import Position
 
@@ -14,7 +16,7 @@ class ChunkLock(engine.model):
     def acquire(self):
         self.time = arrow.now()
         try:
-            engine.save(self)
+            overwrite.save(self, condition=ChunkLock.NOT_EXIST)
         except ConstraintViolation:
             existing_lock = self._current()
 
@@ -25,7 +27,7 @@ class ChunkLock(engine.model):
             if existing_lock is None:
                 raise RetryOperation()
 
-            elapsed = (existing_lock.time - self.time).total_seconds()
+            elapsed = (self.time - existing_lock.time).total_seconds()
 
             # The worker hasn't checked in within the timeout; release the
             # old lock, and signal a retry.
@@ -46,7 +48,9 @@ class ChunkLock(engine.model):
 
     def release(self):
         try:
-            engine.delete(self)
+            # Only delete the EXACT lock we have - any change and we
+            # would be deleting the wrong lock
+            atomic.delete(self)
         except ConstraintViolation:
             # The lock has changed - either it expired and was overwritten,
             # or the same worker holds it and it was refreshed.
@@ -58,7 +62,7 @@ class ChunkLock(engine.model):
     def renew(self):
         self.time = arrow.now()
         try:
-            engine.save(self)
+            atomic.save(self)
         except ConstraintViolation:
             # The lock was deleted, another worker took it over, or
             # it was renewed before this call.
@@ -88,8 +92,10 @@ class ChunkLock(engine.model):
         """
         existing_lock = ChunkLock(world=self.world, chunk=self.chunk)
         try:
-            engine.load(existing_lock)
+            consistent.load(existing_lock)
         except NotModified:
             return None
         else:
             return existing_lock
+
+ChunkLock.NOT_EXIST = ChunkLock.world.is_(None) & ChunkLock.chunk.is_(None)
