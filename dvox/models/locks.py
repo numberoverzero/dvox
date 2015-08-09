@@ -2,12 +2,12 @@ import arrow
 from bloop import Column, UUID, DateTime, ConstraintViolation, NotModified
 
 from dvox.app import config
-from dvox.engines import atomic, consistent, engine, overwrite
+from dvox import engines
 from dvox.exceptions import InUse, RetryOperation, Expired
 from dvox.models.types import Position
 
 
-class ChunkLock(engine.model):
+class ChunkLock(engines.model):
     world = Column(UUID, hash_key=True, name='w')
     chunk = Column(Position, range_key=True, name="c")
     worker = Column(UUID, name='r')
@@ -16,7 +16,7 @@ class ChunkLock(engine.model):
     def acquire(self):
         self.time = arrow.now()
         try:
-            overwrite.save(self, condition=ChunkLock.NOT_EXIST)
+            engines.overwrite.save(self, condition=ChunkLock.NOT_EXIST)
         except ConstraintViolation:
             existing_lock = self._current()
 
@@ -56,7 +56,7 @@ class ChunkLock(engine.model):
         try:
             # Only delete the EXACT lock we have - any change and we
             # would be deleting the wrong lock
-            atomic.delete(self)
+            engines.atomic.delete(self)
         except ConstraintViolation:
             # The lock has changed - either it expired and was overwritten,
             # or the same worker holds it and it was refreshed.
@@ -68,7 +68,7 @@ class ChunkLock(engine.model):
     def renew(self):
         self.time = arrow.now()
         try:
-            atomic.save(self)
+            engines.atomic_overwrite.save(self)
         except ConstraintViolation:
             # The lock was deleted, another worker took it over, or
             # it was renewed before this call.
@@ -92,7 +92,7 @@ class ChunkLock(engine.model):
         """
         existing_lock = ChunkLock(world=self.world, chunk=self.chunk)
         try:
-            consistent.load(existing_lock)
+            engines.consistent.load(existing_lock)
         except NotModified:
             return None
         else:
