@@ -12,6 +12,8 @@ class ChunkLock(engines.model):
     worker = Column(UUID, name='r')
     expires = Column(DateTime, name='e')
 
+    NOT_EXIST = world.is_(None) & chunk.is_(None)
+
     def acquire(self):
         """Acquire the lock on this chunk.
         Raises `InUse` if a different worker owns the lock on this chunk."""
@@ -52,5 +54,3 @@ class ChunkLock(engines.model):
             return None
         else:
             return existing_lock
-
-ChunkLock.NOT_EXIST = ChunkLock.world.is_(None) & ChunkLock.chunk.is_(None)
