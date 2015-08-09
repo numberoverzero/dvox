@@ -13,3 +13,8 @@ class RetryOperation(Exception):
     Thrown when an operation failed, but can be retried without modification
     '''
     pass
+
+
+class Expired(Exception):
+    ''' Thrown when a lock is no longer valid '''
+    pass
