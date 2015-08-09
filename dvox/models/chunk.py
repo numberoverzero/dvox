@@ -18,10 +18,7 @@ class Chunk(engines.model):
         super().__init__(**kwargs)
 
     def lock(self, worker):
-        """
-        Returns a lock if one can be acquired.
-        Otherwise, returns None.
-        """
+        """Returns a lock if one can be acquired, or None."""
         lock = ChunkLock(world=self.world, chunk=self.coords, worker=worker)
         try:
             lock.acquire()
