@@ -13,6 +13,8 @@ class ChunkLock(engines.model):
     expires = Column(DateTime, name='e')
 
     def acquire(self):
+        """Acquire the lock on this chunk.
+        Raises `InUse` if a different worker owns the lock on this chunk."""
         now = arrow.now()
         self.expires = now.replace(
             seconds=config["CHUNK_LOCK_TIMEOUT_SECONDS"])
@@ -21,55 +23,51 @@ class ChunkLock(engines.model):
         except ConstraintViolation:
             existing_lock = self.current()
 
-            # The lock that existed when we tried to save above is
-            # no longer there.  A periodic cleanup may have swept it
-            # up, or it was manually released.
-            # At this point we should simply retry the acquire.
+            # Although there was a conflict with an existing lock,
+            # the next load found no lock.  Try again.
             if existing_lock is None:
                 self.acquire()
 
-            # The worker hasn't checked in within the timeout; release the
-            # old lock and retry.
+            # The last worker with the lock didn't check in before
+            # the timeout.  Try again.
             elif now >= existing_lock.expires:
                 try:
                     existing_lock.release()
-                # Suppress InUse, since it means the actual lock was
-                # modified after the existing_lock was loaded.  A retry here
-                # may succeed, if another thread released before us.  At worst,
-                # the acquire call will fall down to the last else below, and
-                # then throw InUse.
+                # After the current lock was loaded, it was modified
+                # before we could release it.  Try again.
                 except InUse:
                     pass
                 self.acquire()
 
-            # The worker that's trying to acquire the lock is
-            # the same one that previously had the lock.  Renew the lock.
+            # The existing lock was held by the same worker.  Try to renew.
             elif existing_lock.worker == self.worker:
                 try:
                     self.renew()
-                # Some expired locks can be retried.  If the lock was deleted
-                # after the load above, it can be acquired, but renew will
-                # refuse because the lock isn't exactly the same.
-                # This isn't a big deal; if the lock was taken over by
-                # another worker, the next acquire will fail with InUse below.
+                # After the current lock was loaded, it was modified (or
+                # deleted) before we could renew.  Try again.
                 except Expired:
                     self.acquire()
 
-            # Existing lock is owned by a different worker, and was last
-            # acquired within the lock timeout.  Can't be acquired right now.
+            # Existing lock is owned by a different worker and hasn't expired.
             else:
                 raise InUse
         # Success
 
     def release(self):
+        """Release the lock on this chunk.
+
+        Raises `InUse` if the lock was deleted, or a different worker owns
+        the lock, or the expire time was updated for this worker."""
         try:
-            # Only delete the EXACT lock we have - any change and we
-            # would be deleting the wrong lock
             engines.atomic.delete(self)
         except ConstraintViolation:
             raise InUse
 
     def renew(self):
+        """Update the lock's expire time.
+
+        Raises `Expired` if the lock was deleted, or a different worker
+        owns the lock."""
         self.expires = arrow.now().replace(
             seconds=config["CHUNK_LOCK_TIMEOUT_SECONDS"])
         try:
@@ -80,10 +78,7 @@ class ChunkLock(engines.model):
             raise Expired
 
     def current(self):
-        """
-        Returns the current lock for the lock's world/position,
-        or None if one does not exist.
-        """
+        """Return the current lock or None."""
         existing_lock = ChunkLock(world=self.world, chunk=self.chunk)
         try:
             engines.consistent.load(existing_lock)
