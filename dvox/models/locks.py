@@ -1,11 +1,11 @@
 import arrow
 from bloop import Column, UUID, DateTime, ConstraintViolation, NotModified
-from dvox.app import atomic_engine, config
+from dvox.app import engine, config
 from dvox.exceptions import InUse, RetryOperation, Expired
 from dvox.models.types import Position
 
 
-class ChunkLock(atomic_engine.model):
+class ChunkLock(engine.model):
     world = Column(UUID, hash_key=True, name='w')
     chunk = Column(Position, range_key=True, name="c")
     worker = Column(UUID, name='r')
@@ -14,7 +14,7 @@ class ChunkLock(atomic_engine.model):
     def acquire(self):
         self.time = arrow.now()
         try:
-            atomic_engine.save(self)
+            engine.save(self)
         except ConstraintViolation:
             existing_lock = self._current()
 
@@ -46,7 +46,7 @@ class ChunkLock(atomic_engine.model):
 
     def release(self):
         try:
-            atomic_engine.delete(self)
+            engine.delete(self)
         except ConstraintViolation:
             # The lock has changed - either it expired and was overwritten,
             # or the same worker holds it and it was refreshed.
@@ -58,7 +58,7 @@ class ChunkLock(atomic_engine.model):
     def renew(self):
         self.time = arrow.now()
         try:
-            atomic_engine.save(self)
+            engine.save(self)
         except ConstraintViolation:
             # The lock was deleted, another worker took it over, or
             # it was renewed before this call.
@@ -88,7 +88,7 @@ class ChunkLock(atomic_engine.model):
         """
         existing_lock = ChunkLock(world=self.world, chunk=self.chunk)
         try:
-            atomic_engine.load(existing_lock)
+            engine.load(existing_lock)
         except NotModified:
             return None
         else:
