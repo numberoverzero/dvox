@@ -9,3 +9,18 @@ class Position(String):
 
     def dynamo_dump(self, value):
         return ":".join(map(str, value))
+
+
+class StringEnum(String):
+    """Store an enum by the names of its values"""
+    def __init__(self, enum):
+        self.enum = enum
+        super().__init__()
+
+    def dynamo_load(self, value):
+        value = super().dynamo_load(value)
+        return self.enum[value]
+
+    def dynamo_dump(self, value):
+        value = value.name
+        return super().dynamo_dump(value)
